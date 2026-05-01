@@ -30,7 +30,7 @@ export function DetailPanel() {
         className="fixed inset-0 bg-black/30 z-40"
         onClick={() => selectTask(null)}
       />
-      <div className="fixed top-0 right-0 bottom-0 w-[640px] max-w-[90vw] bg-neutral-950 border-l border-neutral-800 z-40 overflow-y-auto flex flex-col">
+      <div className="fixed top-0 right-0 bottom-0 w-[880px] max-w-[92vw] bg-neutral-950 border-l border-neutral-800 z-40 overflow-y-auto flex flex-col">
         <Header
           task={task}
           onClose={() => selectTask(null)}
@@ -41,7 +41,7 @@ export function DetailPanel() {
         />
         <div className="p-5 space-y-6 flex-1">
           {task.description && (
-            <div className="text-sm text-neutral-300 leading-relaxed">
+            <div className="text-[15px] text-neutral-200 leading-[1.7]">
               {task.description}
             </div>
           )}

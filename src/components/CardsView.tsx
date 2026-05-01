@@ -2,7 +2,7 @@ import { useMemo, useEffect } from 'react';
 import { useStore } from '../store';
 import { useUIStore } from '../uiStore';
 import type { Task } from '../types';
-import { taskBucket, totalCost } from '../types';
+import { taskBucket, spendSplit } from '../types';
 import { ChatCard } from './cards/ChatCard';
 import { BackgroundedRow } from './cards/BackgroundedRow';
 
@@ -45,8 +45,8 @@ export function CardsView() {
     const running = tasks.filter((t) => taskBucket(t) === 'running').length;
     const done = tasks.filter((t) => taskBucket(t) === 'done').length;
     const failed = tasks.filter((t) => taskBucket(t) === 'failed').length;
-    const spend = tasks.reduce((sum, t) => sum + totalCost(t), 0);
-    return { needsYou, running, done, failed, spend };
+    const split = spendSplit(tasks);
+    return { needsYou, running, done, failed, split };
   }, [tasks]);
 
   // Phase 8.2 — surface waiting count in the tab title (closest browser
@@ -92,12 +92,22 @@ export function CardsView() {
                 failed
               </span>
             )}
-            <span
-              className="font-mono text-neutral-400"
-              title="Approximate (sum across all tasks; cache effects mean per-task accounting is best-effort)"
-            >
-              ~${counts.spend.toFixed(2)} spent
-            </span>
+            {(counts.split.apiUsd > 0 || counts.split.unknownUsd > 0) && (
+              <span
+                className="font-mono text-neutral-400"
+                title="API key (real billed dollars)"
+              >
+                ${(counts.split.apiUsd + counts.split.unknownUsd).toFixed(2)} api
+              </span>
+            )}
+            {counts.split.subscriptionUsd > 0 && (
+              <span
+                className="font-mono text-neutral-500"
+                title="Notional — covered by Claude Code subscription quota"
+              >
+                ~${counts.split.subscriptionUsd.toFixed(2)} sub
+              </span>
+            )}
           </div>
         </div>
 

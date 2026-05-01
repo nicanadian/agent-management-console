@@ -28,8 +28,9 @@ import {
 } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { runValidation } from './validator.mjs';
-import { ingestEvent, lastSeq } from './event-store.mjs';
+import { ingestEvent, lastSeq, readAllEvents } from './event-store.mjs';
 import { reconcile } from './reconciler.mjs';
+import { subscribe as subscribeToEventTail } from './event-tailer.mjs';
 
 const CONSOLE_DIR = resolve(process.env.CONSOLE_DIR || '.agent-console');
 const PORT = parseInt(process.env.CONSOLE_API_PORT || '3001', 10);
@@ -39,21 +40,48 @@ const HOST = '127.0.0.1';
 const STALE_RUN_THRESHOLD_MS = 2 * 60 * 1000;
 const SWEEP_INTERVAL_MS = 30 * 1000;
 
+// Phase 12.3 — SSE
+const SSE_HEARTBEAT_MS = 15 * 1000;
+const SSE_CONNECTION_WARN_THRESHOLD = 32;
+let activeSseClients = 0;
+
 const server = createServer(async (req, res) => {
   res.setHeader('Content-Type', 'application/json');
 
   try {
     const url = req.url || '';
     const method = req.method || 'GET';
+    // Path + query split; the second arg is a throwaway base — req.url is
+    // always path+query, never absolute.
+    const parsedUrl = new URL(url, 'http://x');
+    const pathname = parsedUrl.pathname;
+    const query = parsedUrl.searchParams;
 
-    if (method === 'GET' && url === '/api/state') {
-      res.end(JSON.stringify(readSnapshot()));
+    if (method === 'GET' && pathname === '/api/state') {
+      // Phase 12.1 — `?createdBy=<value>` filters tasks by provenance tag.
+      // Agents are always returned in full (they're a global registry).
+      const createdBy = query.get('createdBy');
+      const snapshot = readSnapshot();
+      if (createdBy) {
+        snapshot.tasks = snapshot.tasks.filter(
+          (t) => (t.createdBy ?? 'ui') === createdBy
+        );
+      }
+      res.end(JSON.stringify(snapshot));
+      return;
+    }
+
+    // Phase 12.3 — Server-Sent Events stream. One open connection per
+    // client; resume via `?since=<seq>` or `Last-Event-ID` header.
+    // Optional `?taskId=<id>` narrows to one task's events.
+    if (method === 'GET' && pathname === '/api/events') {
+      await handleSseEvents(req, res, query);
       return;
     }
 
     if (method === 'POST' && url === '/api/messages') {
       const body = await readBody(req);
-      const { taskId, text, mode } = JSON.parse(body);
+      const { taskId, text, mode, attachments } = JSON.parse(body);
       if (!taskId || typeof text !== 'string') {
         res.statusCode = 400;
         res.end(JSON.stringify({ error: 'taskId and text required' }));
@@ -67,6 +95,9 @@ const server = createServer(async (req, res) => {
           text,
           mode: mode ?? 'auto',
           timestamp: new Date().toISOString(),
+          ...(Array.isArray(attachments) && attachments.length > 0
+            ? { attachments }
+            : {}),
         }) + '\n'
       );
       // Re-engaging un-archives: if the user sends a message, the task
@@ -120,7 +151,8 @@ const server = createServer(async (req, res) => {
 
     if (method === 'POST' && url === '/api/capture') {
       const body = await readBody(req);
-      const { title, prompt, agentId, project, priority } = JSON.parse(body);
+      const { title, prompt, agentId, project, priority, attachments, createdBy } =
+        JSON.parse(body);
       if (!title) {
         res.statusCode = 400;
         res.end(JSON.stringify({ error: 'title required' }));
@@ -129,6 +161,8 @@ const server = createServer(async (req, res) => {
       ensureDirs();
       const taskId = `t${Date.now()}`;
       const now = new Date().toISOString();
+      const hasAttachments =
+        Array.isArray(attachments) && attachments.length > 0;
       const task = {
         id: taskId,
         title,
@@ -144,6 +178,9 @@ const server = createServer(async (req, res) => {
         reviewStatus: 'pending',
         createdAt: now,
         updatedAt: now,
+        // Phase 12.1 — provenance. Default 'ui' so existing UI captures are
+        // tagged consistently and Hermes-originated tasks are filterable.
+        createdBy: typeof createdBy === 'string' && createdBy ? createdBy : 'ui',
         runs: [],
         messages: [],
       };
@@ -151,12 +188,72 @@ const server = createServer(async (req, res) => {
       if (prompt) {
         appendFileSync(
           join(CONSOLE_DIR, 'messages', `${taskId}.jsonl`),
-          JSON.stringify({ text: prompt, mode: 'auto', timestamp: now }) + '\n'
+          JSON.stringify({
+            text: prompt,
+            mode: 'auto',
+            timestamp: now,
+            ...(hasAttachments ? { attachments } : {}),
+          }) + '\n'
         );
         ensureDaemon(taskId);
       }
       res.end(JSON.stringify(task));
       return;
+    }
+
+    // Phase 12.2 — per-entity reads. Lets Hermes (or any client) fetch
+    // a single task/run without pulling the full snapshot.
+    if (method === 'GET') {
+      const taskMatch = pathname.match(/^\/api\/tasks\/([^/]+)$/);
+      if (taskMatch) {
+        const [, taskId] = taskMatch;
+        const file = join(CONSOLE_DIR, 'tasks', `${taskId}.json`);
+        if (!existsSync(file)) {
+          res.statusCode = 404;
+          res.end(JSON.stringify({ error: 'task not found' }));
+          return;
+        }
+        res.end(readFileSync(file, 'utf8'));
+        return;
+      }
+
+      const messagesMatch = pathname.match(/^\/api\/tasks\/([^/]+)\/messages$/);
+      if (messagesMatch) {
+        const [, taskId] = messagesMatch;
+        const file = join(CONSOLE_DIR, 'messages', `${taskId}.jsonl`);
+        if (!existsSync(file)) {
+          // Empty queue is a valid state (e.g. no messages yet, or just
+          // drained by the shim) — return [] rather than 404. The task's
+          // own existence is the 404-worthy fact, checked separately.
+          res.end(JSON.stringify([]));
+          return;
+        }
+        const lines = readFileSync(file, 'utf8').split('\n');
+        const out = [];
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          try {
+            out.push(JSON.parse(line));
+          } catch {
+            /* skip malformed */
+          }
+        }
+        res.end(JSON.stringify(out));
+        return;
+      }
+
+      const runMatch = pathname.match(/^\/api\/runs\/([^/]+)$/);
+      if (runMatch) {
+        const [, runId] = runMatch;
+        const file = join(CONSOLE_DIR, 'runs', `${runId}.json`);
+        if (!existsSync(file)) {
+          res.statusCode = 404;
+          res.end(JSON.stringify({ error: 'run not found' }));
+          return;
+        }
+        res.end(readFileSync(file, 'utf8'));
+        return;
+      }
     }
 
     // POST /api/tasks/<taskId>/{stop,cancel}
@@ -236,6 +333,106 @@ function readBody(req) {
     req.on('end', () => resolveBody(body));
     req.on('error', reject);
   });
+}
+
+// Phase 12.3 — SSE handler. Catchup-then-tail with single-source
+// dedup via `highestEmittedSeq`.
+async function handleSseEvents(req, res, query) {
+  const eventsFile = join(CONSOLE_DIR, 'events.jsonl');
+  const taskFilter = query.get('taskId');
+
+  // Resume point: Last-Event-ID header wins (browser EventSource sets
+  // it automatically on reconnect), falls back to ?since=, defaults 0.
+  const lastEventIdHeader = req.headers['last-event-id'];
+  const sinceQuery = query.get('since');
+  const resume = parseSeq(lastEventIdHeader) ?? parseSeq(sinceQuery) ?? 0;
+
+  // SSE headers — overrides the JSON Content-Type set at the top of the
+  // request handler. `X-Accel-Buffering: no` asks any intermediary not
+  // to buffer (Vite's dev proxy is already pass-through, but harmless).
+  res.statusCode = 200;
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.setHeader('X-Accel-Buffering', 'no');
+  res.flushHeaders?.();
+
+  activeSseClients += 1;
+  if (activeSseClients > SSE_CONNECTION_WARN_THRESHOLD) {
+    console.warn(
+      `sse: ${activeSseClients} concurrent clients (>${SSE_CONNECTION_WARN_THRESHOLD}) — investigate for leaks`
+    );
+  }
+
+  let highestEmitted = resume;
+  let catchupDone = false;
+  const tailBuffer = [];
+
+  function matchesFilter(ev) {
+    if (taskFilter && ev.taskId !== taskFilter) return false;
+    return true;
+  }
+
+  function emit(ev) {
+    if (!matchesFilter(ev)) return;
+    if (typeof ev.seq !== 'number' || ev.seq <= highestEmitted) return;
+    highestEmitted = ev.seq;
+    const type = typeof ev.type === 'string' ? ev.type : 'event';
+    res.write(`event: ${type}\n`);
+    res.write(`id: ${ev.seq}\n`);
+    res.write(`data: ${JSON.stringify(ev)}\n\n`);
+  }
+
+  // Subscribe to live tail BEFORE catchup so events arriving during the
+  // async catchup read are captured. Apply the same emit() filter so
+  // dedup via `highestEmitted` covers any overlap with catchup.
+  const unsubscribe = subscribeToEventTail(eventsFile, (ev) => {
+    if (catchupDone) emit(ev);
+    else tailBuffer.push(ev);
+  });
+
+  // Heartbeat keeps the connection alive through idle proxies/load
+  // balancers. SSE comments (`:`-prefixed lines) are ignored by clients.
+  const heartbeat = setInterval(() => {
+    if (!res.writableEnded) res.write(':keepalive\n\n');
+  }, SSE_HEARTBEAT_MS);
+
+  function cleanup() {
+    unsubscribe();
+    clearInterval(heartbeat);
+    activeSseClients = Math.max(0, activeSseClients - 1);
+    if (!res.writableEnded) {
+      try {
+        res.end();
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+  req.on('close', cleanup);
+  req.on('error', cleanup);
+
+  // Catchup pass.
+  try {
+    const all = await readAllEvents(eventsFile);
+    for (const ev of all) emit(ev);
+  } catch (err) {
+    console.error('sse catchup failed:', err.message || err);
+  }
+  catchupDone = true;
+
+  // Drain any tail events that arrived during catchup. After this point
+  // the live subscriber emits directly.
+  while (tailBuffer.length > 0) {
+    const ev = tailBuffer.shift();
+    emit(ev);
+  }
+}
+
+function parseSeq(value) {
+  if (value === undefined || value === null) return null;
+  const n = Number(value);
+  return Number.isFinite(n) && n >= 0 ? n : null;
 }
 
 function readSnapshot() {

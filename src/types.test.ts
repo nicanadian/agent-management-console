@@ -1,6 +1,13 @@
 import { describe, it, expect } from 'vitest';
 import type { Task, Run } from './types';
-import { taskBucket, latestRun, totalCost, taskCost } from './types';
+import {
+  taskBucket,
+  latestRun,
+  totalCost,
+  taskCost,
+  billingModeForRun,
+  spendSplit,
+} from './types';
 
 function makeTask(overrides: Partial<Task> = {}): Task {
   return {
@@ -214,5 +221,91 @@ describe('taskCost', () => {
     const c = taskCost(makeTask({ runs }));
     expect(c.isApproximate).toBe(true);
     expect(c.hasCachedTokens).toBe(true);
+  });
+
+  it('billingMode is subscription when all runs apiKeySource=none', () => {
+    const runs = [
+      makeRun({ id: 'r1', costUsd: 0.5, apiKeySource: 'none' }),
+      makeRun({ id: 'r2', costUsd: 0.5, apiKeySource: 'none' }),
+    ];
+    expect(taskCost(makeTask({ runs })).billingMode).toBe('subscription');
+  });
+
+  it('billingMode is api when run uses an API key', () => {
+    const runs = [makeRun({ id: 'r1', costUsd: 0.5, apiKeySource: 'user' })];
+    expect(taskCost(makeTask({ runs })).billingMode).toBe('api');
+  });
+
+  it('billingMode is mixed when both', () => {
+    const runs = [
+      makeRun({ id: 'r1', costUsd: 0.5, apiKeySource: 'none' }),
+      makeRun({ id: 'r2', costUsd: 0.5, apiKeySource: 'user' }),
+    ];
+    expect(taskCost(makeTask({ runs })).billingMode).toBe('mixed');
+  });
+
+  it('billingMode is unknown when no apiKeySource recorded', () => {
+    const runs = [makeRun({ id: 'r1', costUsd: 0.5 })];
+    expect(taskCost(makeTask({ runs })).billingMode).toBe('unknown');
+  });
+});
+
+describe('billingModeForRun', () => {
+  it('none → subscription', () => {
+    expect(billingModeForRun(makeRun({ apiKeySource: 'none' }))).toBe(
+      'subscription'
+    );
+  });
+  it('user → api', () => {
+    expect(billingModeForRun(makeRun({ apiKeySource: 'user' }))).toBe('api');
+  });
+  it('project / org → api', () => {
+    expect(billingModeForRun(makeRun({ apiKeySource: 'project' }))).toBe('api');
+    expect(billingModeForRun(makeRun({ apiKeySource: 'org' }))).toBe('api');
+  });
+  it('unset → unknown', () => {
+    expect(billingModeForRun(makeRun())).toBe('unknown');
+  });
+});
+
+describe('createdBy provenance (Phase 12.1)', () => {
+  it('round-trips on Task records', () => {
+    const t = makeTask({ createdBy: 'hermes' });
+    expect(t.createdBy).toBe('hermes');
+  });
+
+  it('is optional — absence leaves the field undefined', () => {
+    const t = makeTask();
+    expect(t.createdBy).toBeUndefined();
+  });
+});
+
+describe('spendSplit', () => {
+  it('splits across subscription/api/unknown buckets', () => {
+    const tasks = [
+      makeTask({
+        id: 't1',
+        runs: [
+          makeRun({ id: 'r1', costUsd: 1.5, apiKeySource: 'none' }),
+          makeRun({ id: 'r2', costUsd: 0.5, apiKeySource: 'user' }),
+        ],
+      }),
+      makeTask({
+        id: 't2',
+        runs: [makeRun({ id: 'r3', costUsd: 0.25 })], // no apiKeySource
+      }),
+    ];
+    const split = spendSplit(tasks);
+    expect(split.subscriptionUsd).toBeCloseTo(1.5);
+    expect(split.apiUsd).toBeCloseTo(0.5);
+    expect(split.unknownUsd).toBeCloseTo(0.25);
+  });
+
+  it('returns zeros for empty input', () => {
+    expect(spendSplit([])).toEqual({
+      subscriptionUsd: 0,
+      apiUsd: 0,
+      unknownUsd: 0,
+    });
   });
 });

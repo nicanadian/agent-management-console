@@ -51,6 +51,7 @@ produce:
   "reviewStatus": "pending",
   "createdAt": "2026-04-28T19:00:00Z",
   "updatedAt": "2026-04-28T19:05:12Z",
+  "createdBy": "ui",
   "runs": [],
   "messages": []
 }
@@ -61,6 +62,11 @@ The four explicit status axes match the PRD's separation of agent claim
 LLM-as-judge band (`judged_ok` / `judged_concerns`, Phase 9.3) — those
 are distinct from the deterministic verdicts (`verified` / `failed` /
 …) so a judge result alone cannot dress up unverified output.
+
+`createdBy` (Phase 12.1) is a free-form provenance tag — `'ui'`,
+`'hermes'`, `'cli'`, etc. The server defaults to `'ui'` when
+`/api/capture` omits it. The UI renders a small chip when
+`createdBy && createdBy !== 'ui'`.
 
 ## Run JSON
 
@@ -194,12 +200,64 @@ deterministic fixtures for tests.
 
 `tools/console-server.mjs` listens on `127.0.0.1:3001` and serves:
 
-- `GET  /api/state` — `{ tasks, agents }` (reads `tasks/`, `agents/`)
+- `GET  /api/state` — `{ tasks, agents }` (reads `tasks/`, `agents/`).
+  `?createdBy=<value>` filters tasks by provenance (Phase 12.1).
+- `GET  /api/tasks/<id>` — single task JSON, or 404 (Phase 12.2).
+- `GET  /api/tasks/<id>/messages` — parsed array from
+  `messages/<id>.jsonl`; empty array if no queue exists (Phase 12.2).
+- `GET  /api/runs/<id>` — single run JSON, or 404 (Phase 12.2).
+- `GET  /api/events` — SSE stream of `events.jsonl` (Phase 12.3).
+  Catchup-then-tail; resume via `?since=<seq>` or `Last-Event-ID`
+  header. Optional `?taskId=<id>` narrows to one task.
 - `POST /api/messages` — append to `messages/<task-id>.jsonl`, ensure daemon
-- `POST /api/capture` — create task + spawn daemon
+- `POST /api/capture` — create task + spawn daemon. Body:
+  `{ title, prompt?, agentId?, project?, priority?, attachments?, createdBy? }`.
+  `createdBy` defaults to `'ui'` (Phase 12.1).
 - `POST /api/validate` — run deterministic + judge contracts
 - `POST /api/tasks/<id>/{stop,cancel}` — SIGINT/SIGTERM the daemon
 - `POST /api/tasks/<id>/{assign,accept,reject,archive}` — UI state transitions
+
+### `/api/events` SSE contract (Phase 12.3)
+
+Response headers:
+
+```
+Content-Type: text/event-stream
+Cache-Control: no-cache
+Connection: keep-alive
+X-Accel-Buffering: no
+```
+
+Each event is framed:
+
+```
+event: <event.type>
+id: <event.seq>
+data: <full event JSON>
+
+```
+
+(blank line terminator). The `id:` field doubles as the resume token —
+browser `EventSource` sends it back as `Last-Event-ID` on automatic
+reconnect. Manual clients can pass `?since=<seq>` instead; the header
+takes precedence when both are provided.
+
+The handler emits `:keepalive` SSE comments every 15s so idle
+connections don't get reaped by intermediaries.
+
+The stream is **at-least-once** within a session and **deduped by seq**:
+- On connect, the server reads `events.jsonl` from start and emits each
+  event with `seq > resume` (the catchup phase).
+- Live writes during catchup are buffered, then drained — also filtered
+  by `seq > highestEmittedSeq`. After draining, live writes emit
+  immediately.
+- Reconnect with the last seen `id:` and you'll never see a duplicate.
+
+The implementation is a thin wrapper over `tools/event-tailer.mjs`
+(`fs.watch` on the parent directory + sticky byte offset + partial-line
+buffering). It will be replaced by a SQL-driven feed in Phase 11.2 —
+clients should not depend on framing details beyond the SSE contract
+above.
 
 In dev, `vite.config.ts` proxies `/api/*` from port 3000 → 3001 so
 either process can restart without taking the other down.

@@ -85,13 +85,23 @@ export function ChatCard({ task }: { task: Task }) {
               {run?.runtime && cost.totalUsd > 0 && <span> · </span>}
               {cost.totalUsd > 0 && (
                 <span
-                  title={
-                    cost.isApproximate
-                      ? 'Approximate (sum of runs; cache effects mean per-task accounting is best-effort)'
+                  className={
+                    cost.billingMode === 'subscription'
+                      ? 'text-neutral-600'
                       : undefined
                   }
+                  title={
+                    cost.billingMode === 'subscription'
+                      ? 'Notional — covered by Claude Code subscription quota.'
+                      : cost.isApproximate
+                        ? 'Approximate (sum of runs; cache effects mean per-task accounting is best-effort)'
+                        : undefined
+                  }
                 >
-                  {cost.isApproximate ? '~' : ''}${cost.totalUsd.toFixed(2)}
+                  {cost.billingMode === 'subscription' || cost.isApproximate
+                    ? '~'
+                    : ''}
+                  ${cost.totalUsd.toFixed(2)}
                 </span>
               )}
             </div>
@@ -101,6 +111,16 @@ export function ChatCard({ task }: { task: Task }) {
               {task.agentId}
               {task.agentId && task.project && ' · '}
               {task.project}
+            </div>
+          )}
+          {task.createdBy && task.createdBy !== 'ui' && (
+            <div className="mt-1">
+              <span
+                className="text-[9px] uppercase font-mono tracking-wider text-blue-300/70 bg-blue-950/40 border border-blue-900/40 px-1 rounded"
+                title={`Captured by ${task.createdBy}`}
+              >
+                from {task.createdBy}
+              </span>
             </div>
           )}
         </div>
@@ -210,7 +230,12 @@ export function ChatCard({ task }: { task: Task }) {
               <button
                 onClick={(e) => {
                   e.stopPropagation();
-                  sendMessage(task.id, task.pendingReply!.text, 'interrupt');
+                  sendMessage(
+                    task.id,
+                    task.pendingReply!.text,
+                    'interrupt',
+                    task.pendingReply!.attachments
+                  );
                 }}
                 className="ml-auto text-blue-400 hover:text-blue-300 text-[10px]"
               >

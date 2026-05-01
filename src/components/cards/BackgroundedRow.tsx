@@ -22,14 +22,29 @@ export function BackgroundedRow({ task }: { task: Task }) {
       <span className="text-neutral-300 font-medium shrink-0 max-w-[40%] truncate">
         {task.title}
       </span>
+      {task.createdBy && task.createdBy !== 'ui' && (
+        <span
+          className="text-[9px] uppercase font-mono tracking-wider text-blue-300/70 bg-blue-950/40 border border-blue-900/40 px-1 rounded shrink-0"
+          title={`Captured by ${task.createdBy}`}
+        >
+          {task.createdBy}
+        </span>
+      )}
       <span className="text-neutral-600 truncate flex-1">{preview}</span>
       {task.waitingOnUser && <span className="text-yellow-400 shrink-0">⚠</span>}
       {cost.totalUsd > 0 && (
         <span
           className="text-neutral-600 font-mono shrink-0"
-          title={cost.isApproximate ? 'Approximate (sum of runs)' : undefined}
+          title={
+            cost.billingMode === 'subscription'
+              ? 'Notional — covered by subscription quota'
+              : cost.isApproximate
+                ? 'Approximate (sum of runs)'
+                : undefined
+          }
         >
-          {cost.isApproximate ? '~' : ''}${cost.totalUsd.toFixed(2)}
+          {cost.billingMode === 'subscription' || cost.isApproximate ? '~' : ''}
+          ${cost.totalUsd.toFixed(2)}
         </span>
       )}
     </button>

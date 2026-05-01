@@ -1,12 +1,34 @@
 import type { Task } from '../../types';
 import { latestRun, taskCost } from '../../types';
+import type { BillingMode } from '../../types';
 
 const APPROX_TOOLTIP =
   'Approximate. Sum of per-run costs; cache effects mean exact attribution is per-run only.';
 
+const BILLING_TOOLTIPS: Record<BillingMode, string | undefined> = {
+  subscription:
+    'Notional — paid by your Claude Code subscription quota, not billed in USD.',
+  api: 'Billed to API key.',
+  mixed: 'Mixed — some runs on subscription, some on API key.',
+  unknown: undefined,
+};
+
+const BILLING_LABELS: Record<BillingMode, string | null> = {
+  subscription: 'subscription',
+  api: 'api',
+  mixed: 'mixed',
+  unknown: null,
+};
+
 export function Stats({ task, live }: { task: Task; live?: boolean }) {
   const run = latestRun(task);
   const cost = taskCost(task);
+  const isSubscription = cost.billingMode === 'subscription';
+  const usdLabel = `${isSubscription || cost.isApproximate ? '~' : ''}$${cost.totalUsd.toFixed(2)}`;
+  const billingLabel = BILLING_LABELS[cost.billingMode];
+  const tooltip =
+    BILLING_TOOLTIPS[cost.billingMode] ||
+    (cost.isApproximate ? APPROX_TOOLTIP : undefined);
   return (
     <div className="grid grid-cols-3 gap-3 text-xs">
       {task.agentId && (
@@ -28,10 +50,15 @@ export function Stats({ task, live }: { task: Task; live?: boolean }) {
         <div>
           <div className="text-neutral-500 mb-0.5">Cost</div>
           <div
-            className="text-neutral-200 font-mono"
-            title={cost.isApproximate ? APPROX_TOOLTIP : undefined}
+            className={`font-mono ${isSubscription ? 'text-neutral-500' : 'text-neutral-200'}`}
+            title={tooltip}
           >
-            {cost.isApproximate ? '~' : ''}${cost.totalUsd.toFixed(2)}
+            {usdLabel}
+            {billingLabel && (
+              <span className="text-neutral-600 text-[10px] ml-1">
+                · {billingLabel}
+              </span>
+            )}
           </div>
         </div>
       )}

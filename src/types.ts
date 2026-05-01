@@ -133,6 +133,11 @@ export interface Run {
   cost?: number;
   costUsd?: number;
   costSource?: 'estimated' | 'billed';
+  // Captured from claude's stream-json `system.init` event. `'none'` means
+  // a subscription quota is paying — `costUsd` is then *notional* (what
+  // those tokens would cost on the API). `'user' | 'project' | 'org'`
+  // mean a real API key, and `costUsd` is actually billed money.
+  apiKeySource?: 'none' | 'user' | 'project' | 'org' | string;
   tokens?: TokenUsage;
   agentSummary?: string;
   validationStatus?: ValidationStatus;
@@ -155,10 +160,23 @@ export interface Run {
 
 // === Task ===
 
+// Files attached to a user message. The prototype embeds the bytes inline
+// as a base-64 data URL — fine for small uploads (screenshots, docs) and
+// it survives the JSONL queue → daemon → task.json round-trip without a
+// separate blob store. Swap to a content-addressed store under
+// `.agent-console/attachments/` if/when payload sizes grow.
+export interface Attachment {
+  name: string;
+  size: number;
+  mimeType: string;
+  dataUrl: string;
+}
+
 export interface Message {
   from: 'agent' | 'user';
   text: string;
   timestamp: string;
+  attachments?: Attachment[];
 }
 
 export interface Task {
@@ -183,10 +201,18 @@ export interface Task {
 
   messages?: Message[];
   waitingOnUser?: boolean;
-  pendingReply?: { text: string; queuedAt: string };
+  pendingReply?: {
+    text: string;
+    queuedAt: string;
+    attachments?: Attachment[];
+  };
   // User has dismissed this task to "Recent"; it stays out of the main
   // tray until they re-engage (sending a message clears this).
   archivedAt?: string;
+  // Phase 12.1 — provenance. Free-form: 'ui' | 'hermes' | 'cli' | etc.
+  // Server defaults to 'ui' when capture omits it. The UI renders a chip
+  // when this is set and not 'ui'.
+  createdBy?: string;
 }
 
 // === Agent ===
@@ -248,15 +274,58 @@ export function totalCost(task: Task): number {
   );
 }
 
+// Split spend across many tasks into the two billing buckets so the UI
+// can render "subscription notional" separately from "actually billed."
+export interface SpendSplit {
+  subscriptionUsd: number;  // would-have-cost on API; covered by Claude Code plan
+  apiUsd: number;           // billed to an API key
+  unknownUsd: number;       // run hasn't reported apiKeySource yet
+}
+
+export function spendSplit(tasks: Task[]): SpendSplit {
+  const out: SpendSplit = { subscriptionUsd: 0, apiUsd: 0, unknownUsd: 0 };
+  for (const t of tasks) {
+    for (const r of t.runs || []) {
+      const usd = r.costUsd ?? r.cost ?? 0;
+      if (!usd) continue;
+      const mode = billingModeForRun(r);
+      if (mode === 'subscription') out.subscriptionUsd += usd;
+      else if (mode === 'api') out.apiUsd += usd;
+      else out.unknownUsd += usd;
+    }
+  }
+  return out;
+}
+
 // Phase 9.5 — task-level cost is a sum-of-runs *estimate*; cache effects
 // mean per-task attribution is structurally approximate. Per-run cost
 // remains precise. Surface both so the UI can pick the right rendering
 // (e.g. `~$0.42` for tasks, `$0.18` for individual runs).
+//
+// `billingMode` separates "what would this cost on the API" (always
+// surfaced as `totalUsd`) from "is the user actually being charged this."
+// Subscription runs still emit a USD figure from claude — we mark them
+// notional so the UI doesn't pretend it's money out the door.
+export type BillingMode = 'subscription' | 'api' | 'mixed' | 'unknown';
+
 export interface TaskCost {
   totalUsd: number;
   isApproximate: boolean;
   runCount: number;
   hasCachedTokens: boolean;
+  billingMode: BillingMode;
+}
+
+export function billingModeForRun(run: Run): BillingMode {
+  if (run.apiKeySource === 'none') return 'subscription';
+  if (
+    run.apiKeySource === 'user' ||
+    run.apiKeySource === 'project' ||
+    run.apiKeySource === 'org'
+  ) {
+    return 'api';
+  }
+  return 'unknown';
 }
 
 export function taskCost(task: Task): TaskCost {
@@ -266,10 +335,17 @@ export function taskCost(task: Task): TaskCost {
     (r) =>
       (r.tokens?.cacheCreate ?? 0) > 0 || (r.tokens?.cacheRead ?? 0) > 0
   );
+  const modes = new Set(runs.map(billingModeForRun));
+  modes.delete('unknown');
+  let billingMode: BillingMode;
+  if (modes.size === 0) billingMode = 'unknown';
+  else if (modes.size > 1) billingMode = 'mixed';
+  else billingMode = [...modes][0];
   return {
     totalUsd,
     runCount: runs.length,
     hasCachedTokens,
+    billingMode,
     // > 1 run OR cached tokens distort attribution → render as `~$X`.
     isApproximate: runs.length > 1 || hasCachedTokens,
   };

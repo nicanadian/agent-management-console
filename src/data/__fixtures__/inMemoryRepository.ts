@@ -1,4 +1,4 @@
-import type { Task, Agent, Message } from '../../types';
+import type { Task, Agent, Message, Attachment } from '../../types';
 import { taskBucket } from '../../types';
 import type {
   CaptureInput,
@@ -50,6 +50,17 @@ export class InMemoryRepository implements Repository {
 
   async captureTask(input: CaptureInput): Promise<Task> {
     const now = new Date().toISOString();
+    const ts = new Date().toTimeString().slice(0, 8);
+    const messages: Message[] | undefined = input.attachments?.length
+      ? [
+          {
+            from: 'user',
+            text: '',
+            timestamp: ts,
+            attachments: input.attachments,
+          },
+        ]
+      : undefined;
     const task: Task = {
       id: `t${Date.now()}`,
       title: input.title,
@@ -63,6 +74,8 @@ export class InMemoryRepository implements Repository {
       reviewStatus: input.agentId ? 'pending' : 'not_required',
       createdAt: now,
       updatedAt: now,
+      createdBy: input.createdBy ?? 'ui',
+      messages,
     };
     this.tasks = [task, ...this.tasks];
     this.notify();
@@ -101,7 +114,8 @@ export class InMemoryRepository implements Repository {
   async sendMessage(
     id: string,
     text: string,
-    mode: SendMessageMode
+    mode: SendMessageMode,
+    attachments?: Attachment[]
   ): Promise<Task | undefined> {
     const now = new Date();
     const ts = now.toTimeString().slice(0, 8);
@@ -114,7 +128,11 @@ export class InMemoryRepository implements Repository {
       if (shouldQueue) {
         return {
           ...t,
-          pendingReply: { text, queuedAt: now.toISOString() },
+          pendingReply: {
+            text,
+            queuedAt: now.toISOString(),
+            ...(attachments?.length ? { attachments } : {}),
+          },
         };
       }
 
@@ -122,7 +140,12 @@ export class InMemoryRepository implements Repository {
       const restarting =
         bucket === 'review' || bucket === 'failed' || bucket === 'blocked';
 
-      const newMessage: Message = { from: 'user', text, timestamp: ts };
+      const newMessage: Message = {
+        from: 'user',
+        text,
+        timestamp: ts,
+        ...(attachments?.length ? { attachments } : {}),
+      };
       return {
         ...t,
         messages: [...(t.messages || []), newMessage],

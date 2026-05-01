@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { Task, Agent } from './types';
+import type { Task, Agent, Attachment } from './types';
 import {
   repository,
   type CaptureInput,
@@ -19,7 +19,12 @@ interface DataStore {
   assignTask: (id: string, agentId: string) => Promise<void>;
   acceptTask: (id: string) => Promise<void>;
   rejectTask: (id: string) => Promise<void>;
-  sendMessage: (id: string, text: string, mode: SendMessageMode) => Promise<void>;
+  sendMessage: (
+    id: string,
+    text: string,
+    mode: SendMessageMode,
+    attachments?: Attachment[]
+  ) => Promise<void>;
   stopRun: (id: string) => Promise<void>;
   cancelRun: (id: string) => Promise<void>;
   archiveTask: (id: string) => Promise<void>;
@@ -53,8 +58,8 @@ export const useStore = create<DataStore>((set) => {
     rejectTask: async (id) => {
       await repository.rejectTask(id);
     },
-    sendMessage: async (id, text, mode) => {
-      await repository.sendMessage(id, text, mode);
+    sendMessage: async (id, text, mode, attachments) => {
+      await repository.sendMessage(id, text, mode, attachments);
     },
     stopRun: async (id) => {
       await repository.stopRun(id);

@@ -1,6 +1,6 @@
 import { useStore } from '../store';
 import { useUIStore } from '../uiStore';
-import { totalCost } from '../types';
+import { spendSplit } from '../types';
 
 export function TopBar() {
   const tasks = useStore((s) => s.tasks);
@@ -8,7 +8,9 @@ export function TopBar() {
   const openCapture = useUIStore((s) => s.openCapture);
   const openShortcuts = useUIStore((s) => s.openShortcuts);
 
-  const todayCost = tasks.reduce((sum, t) => sum + totalCost(t), 0);
+  const split = spendSplit(tasks);
+  const apiUsd = split.apiUsd + split.unknownUsd;
+  const subUsd = split.subscriptionUsd;
   const availableAgents = agents.filter((a) => a.status === 'available').length;
 
   return (
@@ -38,14 +40,29 @@ export function TopBar() {
         agents available
       </div>
 
-      <div
-        className="text-xs font-mono text-neutral-400"
-        title="Approximate (sum across all tasks; cache effects mean per-task accounting is best-effort)"
-      >
-        <span className="text-neutral-200 font-medium">
-          ~${todayCost.toFixed(2)}
-        </span>{' '}
-        today
+      <div className="text-xs font-mono text-neutral-400 flex items-center gap-2">
+        {apiUsd > 0 && (
+          <span title="API key (real billed dollars)">
+            <span className="text-neutral-200 font-medium">
+              ${apiUsd.toFixed(2)}
+            </span>{' '}
+            api
+          </span>
+        )}
+        {subUsd > 0 && (
+          <span
+            className="text-neutral-500"
+            title="Notional — covered by Claude Code subscription quota"
+          >
+            <span className="text-neutral-300 font-medium">
+              ~${subUsd.toFixed(2)}
+            </span>{' '}
+            sub
+          </span>
+        )}
+        {apiUsd === 0 && subUsd === 0 && (
+          <span className="text-neutral-600">$0.00 today</span>
+        )}
       </div>
 
       <button

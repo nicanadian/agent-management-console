@@ -1,4 +1,4 @@
-import type { Task, Agent } from '../types';
+import type { Task, Agent, Attachment } from '../types';
 import type {
   CaptureInput,
   Repository,
@@ -62,6 +62,8 @@ export class FileSystemRepository implements Repository {
         agentId: input.agentId,
         project: input.project,
         priority: input.priority,
+        attachments: input.attachments,
+        createdBy: input.createdBy,
       }),
     });
     if (!res.ok) {
@@ -87,12 +89,13 @@ export class FileSystemRepository implements Repository {
   async sendMessage(
     id: string,
     text: string,
-    mode: SendMessageMode
+    mode: SendMessageMode,
+    attachments?: Attachment[]
   ): Promise<Task | undefined> {
     await fetch('/api/messages', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ taskId: id, text, mode }),
+      body: JSON.stringify({ taskId: id, text, mode, attachments }),
     });
     return undefined;
   }

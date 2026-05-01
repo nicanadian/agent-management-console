@@ -1,4 +1,4 @@
-import type { Task, Agent, Priority } from '../types';
+import type { Task, Agent, Priority, Attachment } from '../types';
 import { FileSystemRepository } from './fileSystemRepository';
 
 // The repository is the persistence boundary. The FileSystemRepository is
@@ -18,6 +18,10 @@ export interface CaptureInput {
   agentId?: string;
   project?: string;
   priority?: Priority;
+  attachments?: Attachment[];
+  // Phase 12.1 — provenance tag (e.g. 'ui', 'hermes', 'cli'). Server
+  // defaults to 'ui' when omitted.
+  createdBy?: string;
 }
 
 export interface RepositorySnapshot {
@@ -38,7 +42,8 @@ export interface Repository {
   sendMessage(
     id: string,
     text: string,
-    mode: SendMessageMode
+    mode: SendMessageMode,
+    attachments?: Attachment[]
   ): Promise<Task | undefined>;
   // Phase 6.6: signal the per-task shim daemon.
   // stopRun:    SIGINT  → claude finishes in-flight tool, daemon stays alive.

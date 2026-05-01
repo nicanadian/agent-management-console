@@ -119,7 +119,8 @@ async function runDaemon(taskId, cwd) {
     }
 
     const prompt = queued.map((m) => m.text).join('\n\n---\n\n');
-    const result = await runOneTurn(taskId, prompt, cwd);
+    const queuedAttachments = queued.flatMap((m) => m.attachments || []);
+    const result = await runOneTurn(taskId, prompt, cwd, queuedAttachments);
     stdout.write(
       `turn ${result.runId} ${result.status} · cost $${result.cost.toFixed(4)} · ${result.runtime}\n`
     );
@@ -136,7 +137,7 @@ async function runDaemon(taskId, cwd) {
 // Run a single Claude turn for a task. Reads the task to find the last
 // session_id (for --resume), spawns claude, parses stream-json events,
 // writes updates atomically, returns when claude exits.
-async function runOneTurn(taskId, initialPrompt, cwd) {
+async function runOneTurn(taskId, initialPrompt, cwd, initialAttachments = []) {
   const taskFile = join(CONSOLE_DIR, 'tasks', `${taskId}.json`);
   const messagesQueueFile = join(CONSOLE_DIR, 'messages', `${taskId}.jsonl`);
   const eventsFile = join(CONSOLE_DIR, 'events.jsonl');
@@ -155,18 +156,25 @@ async function runOneTurn(taskId, initialPrompt, cwd) {
     additionalQueued.length === 0
       ? initialPrompt
       : [initialPrompt, ...additionalQueued.map((m) => m.text)].join('\n\n---\n\n');
+  const attachments = [
+    ...initialAttachments,
+    ...additionalQueued.flatMap((m) => m.attachments || []),
+  ];
 
   // Find a previous sessionId to resume from
   const lastRun =
     task.runs && task.runs.length > 0 ? task.runs[task.runs.length - 1] : null;
   const resumeSessionId = lastRun?.sessionId || null;
 
-  // Append user turn to transcript
+  // Append user turn to transcript. Attachments ride along on the message
+  // record so the UI can render them; the prototype does NOT pass them to
+  // claude (no agent wiring yet — see PRD).
   task.messages = task.messages || [];
   task.messages.push({
     from: 'user',
     text: fullPrompt,
     timestamp: timeString(),
+    ...(attachments.length > 0 ? { attachments } : {}),
   });
   task.lifecycleStatus = 'running';
   task.claimedStatus = 'none';
@@ -244,12 +252,12 @@ async function runOneTurn(taskId, initialPrompt, cwd) {
         );
         eventCounter++;
 
-        if (
-          event.type === 'system' &&
-          event.subtype === 'init' &&
-          event.session_id
-        ) {
-          run.sessionId = event.session_id;
+        if (event.type === 'system' && event.subtype === 'init') {
+          if (event.session_id) run.sessionId = event.session_id;
+          // `apiKeySource: 'none'` means a Pro/Max subscription is paying;
+          // 'user' / 'project' / 'org' mean a real API key. The UI uses
+          // this to mark cost as notional vs actually billed.
+          if (event.apiKeySource) run.apiKeySource = event.apiKeySource;
         }
 
         if (event.type === 'assistant' && event.message?.content) {
