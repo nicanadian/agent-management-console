@@ -1,0 +1,13 @@
+node_modules
+dist
+dist-ssr
+*.local
+.DS_Store
+.vite
+.agent-console
+
+# tsc -b incremental build artifacts
+*.tsbuildinfo
+# Compiled output from `tsc -b` of vite.config.ts — only the .ts source is canonical
+vite.config.js
+vite.config.d.ts
