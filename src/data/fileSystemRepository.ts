@@ -1,6 +1,7 @@
-import type { Task, Agent, Attachment } from '../types';
+import type { Task, Agent, Attachment, ProjectInfo } from '../types';
 import type {
   CaptureInput,
+  RegisterProjectInput,
   Repository,
   RepositoryListener,
   RepositorySnapshot,
@@ -72,6 +73,33 @@ export class FileSystemRepository implements Repository {
     const task = (await res.json()) as Task;
     this.refresh();
     return task;
+  }
+
+  // Phase 13 — the server stores projects as a { name: {repoPath, …} }
+  // map; the UI works in arrays, so normalize on the way out.
+  async listProjects(): Promise<ProjectInfo[]> {
+    const res = await fetch('/api/projects');
+    if (!res.ok) return [];
+    const map = (await res.json()) as Record<
+      string,
+      { repoPath: string; defaultBranch?: string }
+    >;
+    return Object.entries(map).map(([name, v]) => ({ name, ...v }));
+  }
+
+  async registerProject(input: RegisterProjectInput): Promise<ProjectInfo> {
+    const res = await fetch('/api/projects', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(input),
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      // Surface the server's reason (e.g. "<path> is not a git work tree")
+      // so the panel can show it inline.
+      throw new Error(body.error || `register failed: ${res.status}`);
+    }
+    return body as ProjectInfo;
   }
 
   async assignTask(id: string, agentId: string): Promise<Task | undefined> {

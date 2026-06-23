@@ -20,7 +20,8 @@ export function useKeyboard() {
       }
 
       if (isInput) return;
-      if (ui.capturePaletteOpen || ui.shortcutsOverlayOpen) return;
+      if (ui.capturePaletteOpen || ui.shortcutsOverlayOpen || ui.projectsPanelOpen)
+        return;
 
       if (e.key === 'c') {
         e.preventDefault();
@@ -30,6 +31,16 @@ export function useKeyboard() {
       if (e.key === '?') {
         e.preventDefault();
         ui.openShortcuts();
+        return;
+      }
+      if (e.key === 'v') {
+        e.preventDefault();
+        ui.toggleViewMode();
+        return;
+      }
+      if (e.key === 'p') {
+        e.preventDefault();
+        ui.openProjects();
         return;
       }
 

@@ -11,13 +11,19 @@ export function CapturePalette() {
   const inputRef = useRef<HTMLInputElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const captureTask = useStore((s) => s.captureTask);
+  const projects = useStore((s) => s.projects);
   const closeCapture = useUIStore((s) => s.closeCapture);
+  const openProjects = useUIStore((s) => s.openProjects);
 
   useEffect(() => {
     inputRef.current?.focus();
   }, []);
 
   const parsed = useMemo(() => parseCapture(value), [value]);
+  // A #project only gets a worktree if it's registered; otherwise the task
+  // still runs, just in the server's cwd (pre-Phase-13 behavior).
+  const projectRegistered =
+    !!parsed.project && projects.some((p) => p.name === parsed.project);
   const hasChips = !!(parsed.agentId || parsed.project || parsed.priority);
   const canSubmit = parsed.title.trim().length > 0;
 
@@ -134,12 +140,31 @@ export function CapturePalette() {
               />
             )}
             {parsed.project && (
-              <Chip
-                label={parsed.project}
-                prefix="#"
-                color="purple"
-                title="Project"
-              />
+              <>
+                <Chip
+                  label={parsed.project}
+                  prefix="#"
+                  color={projectRegistered ? 'purple' : 'neutral'}
+                  title={
+                    projectRegistered
+                      ? 'Registered project — runs in an isolated worktree'
+                      : 'Unregistered — runs without a worktree'
+                  }
+                />
+                {!projectRegistered && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      closeCapture();
+                      openProjects();
+                    }}
+                    className="text-[10px] text-amber-400/80 hover:text-amber-300 underline decoration-dotted"
+                    title="No worktree isolation until this project is registered"
+                  >
+                    not registered — add it
+                  </button>
+                )}
+              </>
             )}
             {parsed.priority && (
               <Chip

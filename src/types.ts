@@ -179,6 +179,57 @@ export interface Message {
   attachments?: Attachment[];
 }
 
+// Phase 13 — per-task git worktree. Present when the task's `project`
+// resolves through the registry (.agent-console/projects.json); the
+// daemon then runs in `path` on `branch`. Accept merges the branch into
+// `defaultBranch`; archive removes the directory but keeps the branch.
+export interface WorktreeInfo {
+  path: string;
+  branch: string;
+  repoPath: string;
+  defaultBranch?: string;
+  // 'local' merges on accept; 'github-pr' pushes + opens a PR on accept.
+  mergeMode?: 'local' | 'github-pr';
+  // Phase 13.1 — one-time worktree setup (e.g. npm install).
+  setupStatus?: 'running' | 'done' | 'failed';
+  mergedAt?: string;
+  mergeCommit?: string;
+  // Set when an accept was blocked by a merge conflict.
+  mergeConflicts?: string[];
+  // Phase 13.2 — github-pr mode: the PR opened on accept, and its state as
+  // last polled from GitHub (`gh pr view`).
+  prUrl?: string;
+  prNumber?: number;
+  prState?: 'open' | 'merged' | 'closed';
+  prMergedAt?: string;
+  prMergeCommit?: string;
+  removedAt?: string;
+}
+
+// Phase 13 — a registered project from .agent-console/projects.json.
+// Tasks whose `project` matches a registered name run in a per-task
+// worktree off `defaultBranch`.
+export interface ProjectInfo {
+  name: string;
+  repoPath: string;
+  defaultBranch?: string;
+  // Shell command run once in each fresh worktree (e.g. `npm install`).
+  setupCommand?: string;
+  // How accept ships the work: local merge (default) or open a GitHub PR.
+  mergeMode?: 'local' | 'github-pr';
+}
+
+// Shape of GET /api/tasks/:id/diff — committed work on the task branch
+// plus any uncommitted paths still sitting in the worktree.
+export interface TaskDiff {
+  branch: string;
+  defaultBranch: string;
+  baseCommit: string;
+  stat: string;
+  files: { path: string; added: number; deleted: number }[];
+  uncommitted: string[];
+}
+
 export interface Task {
   id: string;
   title: string;
@@ -213,6 +264,8 @@ export interface Task {
   // Server defaults to 'ui' when capture omits it. The UI renders a chip
   // when this is set and not 'ui'.
   createdBy?: string;
+  // Phase 13 — set by the server when the daemon runs in a git worktree.
+  worktree?: WorktreeInfo;
 }
 
 // === Agent ===

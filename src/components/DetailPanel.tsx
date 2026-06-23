@@ -8,6 +8,7 @@ import { RunningView } from './detail/RunningView';
 import { ReviewView } from './detail/ReviewView';
 import { FailedView } from './detail/FailedView';
 import { InboxView } from './detail/InboxView';
+import { WorktreeSection } from './detail/WorktreeSection';
 
 export function DetailPanel() {
   const tasks = useStore((s) => s.tasks);
@@ -45,6 +46,7 @@ export function DetailPanel() {
               {task.description}
             </div>
           )}
+          {task.worktree && <WorktreeSection task={task} />}
           {task.messages && task.messages.length > 0 && (
             <Conversation task={task} />
           )}
@@ -90,6 +92,7 @@ function Header({
         <div className="text-[10px] font-mono uppercase text-neutral-500 mb-1 tracking-wider">
           {task.type} · {bucket}
           {task.project && ` · ${task.project}`}
+          {task.worktree && ` · ${task.worktree.branch}`}
           {task.archivedAt && ' · archived'}
         </div>
         <div className="text-base font-medium text-neutral-100 leading-snug">

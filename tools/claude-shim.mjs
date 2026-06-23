@@ -35,6 +35,11 @@ import { ingestEvent } from './event-store.mjs';
 const CONSOLE_DIR = process.env.CONSOLE_DIR || '.agent-console';
 const IDLE_TIMEOUT_MS = 5 * 60 * 1000;
 const POLL_INTERVAL_MS = 1000;
+// Headless autonomous agents can't pause for per-tool approval. When the
+// console operator opts in (e.g. for trusted worktree-isolated runs), pass
+// the mode straight through to claude. Default unset → claude's normal
+// interactive permission behavior, unchanged.
+const PERMISSION_MODE = process.env.CONSOLE_CLAUDE_PERMISSION_MODE || '';
 
 // Set by runOneTurn so the daemon's signal handlers can forward.
 let currentClaude = null;
@@ -198,6 +203,7 @@ async function runOneTurn(taskId, initialPrompt, cwd, initialAttachments = []) {
     '--output-format',
     'stream-json',
     '--verbose',
+    ...(PERMISSION_MODE ? ['--permission-mode', PERMISSION_MODE] : []),
     ...(resumeSessionId ? ['--resume', resumeSessionId] : []),
     fullPrompt,
   ];

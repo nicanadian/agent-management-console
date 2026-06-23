@@ -24,8 +24,11 @@ let eventsFile;
 
 // Wait for a predicate to become true, polling at short intervals.
 // fs.watch fires via the OS, so tests must yield to the event loop
-// rather than asserting synchronously.
-async function waitFor(predicate, timeoutMs = 1500) {
+// rather than asserting synchronously. Budget covers a few of the
+// tailer's safety-net poll cycles (SAFETY_POLL_MS = 1s): when the full
+// suite runs concurrently, macOS can drop the watch event entirely, and
+// recovery then waits on that poll rather than the (instant) watcher.
+async function waitFor(predicate, timeoutMs = 3000) {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
     if (predicate()) return;

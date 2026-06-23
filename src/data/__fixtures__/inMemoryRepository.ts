@@ -1,7 +1,8 @@
-import type { Task, Agent, Message, Attachment } from '../../types';
+import type { Task, Agent, Message, Attachment, ProjectInfo } from '../../types';
 import { taskBucket } from '../../types';
 import type {
   CaptureInput,
+  RegisterProjectInput,
   Repository,
   RepositoryListener,
   RepositorySnapshot,
@@ -14,11 +15,13 @@ import type {
 export class InMemoryRepository implements Repository {
   private tasks: Task[];
   private agents: Agent[];
+  private projects: ProjectInfo[];
   private listeners: Set<RepositoryListener> = new Set();
 
-  constructor(seed?: { tasks?: Task[]; agents?: Agent[] }) {
+  constructor(seed?: { tasks?: Task[]; agents?: Agent[]; projects?: ProjectInfo[] }) {
     this.tasks = seed?.tasks ? [...seed.tasks] : [];
     this.agents = seed?.agents ? [...seed.agents] : [];
+    this.projects = seed?.projects ? [...seed.projects] : [];
   }
 
   subscribe(listener: RepositoryListener): () => void {
@@ -46,6 +49,20 @@ export class InMemoryRepository implements Repository {
 
   async getTask(id: string): Promise<Task | undefined> {
     return this.tasks.find((t) => t.id === id);
+  }
+
+  async listProjects(): Promise<ProjectInfo[]> {
+    return [...this.projects];
+  }
+
+  async registerProject(input: RegisterProjectInput): Promise<ProjectInfo> {
+    const entry: ProjectInfo = {
+      name: input.name,
+      repoPath: input.repoPath,
+      defaultBranch: input.defaultBranch ?? 'main',
+    };
+    this.projects = [...this.projects.filter((p) => p.name !== entry.name), entry];
+    return entry;
   }
 
   async captureTask(input: CaptureInput): Promise<Task> {

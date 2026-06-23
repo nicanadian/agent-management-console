@@ -6,6 +6,12 @@
 // fs.watch fire can land mid-line if the writer is slow or the OS
 // coalesces. Every emit is a complete `\n`-terminated JSON line.
 //
+// fs.watch is not a reliable delivery channel: macOS (and inotify under
+// load) may coalesce or silently drop change events, which would strand a
+// subscriber until the *next* write. A low-frequency safety-net poll runs
+// alongside the watcher to reconcile any missed event. It only runs while
+// there are subscribers, so the idle-cost guarantee below is unaffected.
+//
 // Subscribers receive parsed events. The watcher is stopped automatically
 // when the last subscriber unsubscribes, so the tailer adds no idle cost
 // when no SSE clients are connected.
@@ -24,8 +30,13 @@ import {
 } from 'node:fs';
 import { dirname, basename } from 'node:path';
 
-// eventsFile → { offset, partial, subscribers, watcher?, poller? }
+// eventsFile → { offset, partial, subscribers, watcher?, poller?, safetyPoll? }
 const TAILERS = new Map();
+
+// How often the safety-net poll reconciles events fs.watch may have
+// dropped. Low enough that a stranded subscriber recovers quickly, high
+// enough to stay negligible next to the watcher's instant delivery.
+const SAFETY_POLL_MS = 1000;
 
 // Subscribe to new events appended to `eventsFile`. Returns an
 // unsubscribe function. The watcher starts on the first subscribe and
@@ -43,6 +54,7 @@ export function subscribe(eventsFile, listener) {
       subscribers: new Set(),
       watcher: null,
       poller: null,
+      safetyPoll: null,
     };
     TAILERS.set(eventsFile, entry);
     startWatcher(eventsFile, entry);
@@ -80,9 +92,19 @@ function startWatcher(eventsFile, entry) {
       if (filename && filename !== name) return;
       handleChange(eventsFile, entry);
     });
+    // Safety net for events fs.watch coalesces or drops. handleChange is
+    // idempotent (no-ops when the file size hasn't advanced), so this is
+    // cheap and never double-emits. Unref so it can't hold the process
+    // open on its own.
+    entry.safetyPoll = setInterval(
+      () => handleChange(eventsFile, entry),
+      SAFETY_POLL_MS
+    );
+    entry.safetyPoll.unref?.();
   } catch {
     // Fallback: 250ms poll if fs.watch is unavailable (rare — usually
-    // means the parent dir doesn't exist yet).
+    // means the parent dir doesn't exist yet). No separate safety net
+    // needed — the poller already reconciles on every tick.
     entry.poller = setInterval(() => handleChange(eventsFile, entry), 250);
   }
 }
@@ -95,6 +117,10 @@ function stopWatcher(entry) {
   if (entry.poller) {
     clearInterval(entry.poller);
     entry.poller = null;
+  }
+  if (entry.safetyPoll) {
+    clearInterval(entry.safetyPoll);
+    entry.safetyPoll = null;
   }
 }
 

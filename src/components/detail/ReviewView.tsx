@@ -12,6 +12,7 @@ export function ReviewView({
   onReject: () => void;
 }) {
   const run = latestRun(task);
+  const isPrMode = task.worktree?.mergeMode === 'github-pr';
   return (
     <>
       <Stats task={task} />
@@ -73,8 +74,13 @@ export function ReviewView({
         <button
           onClick={onAccept}
           className="flex-1 px-4 py-2 bg-green-600 hover:bg-green-500 text-white text-sm rounded font-medium flex items-center justify-center gap-2"
+          title={
+            isPrMode
+              ? 'Push the branch and open a GitHub PR'
+              : 'Merge the branch into the default branch'
+          }
         >
-          Accept
+          {isPrMode ? 'Accept & open PR' : 'Accept'}
           <kbd className="text-[10px] px-1 py-0.5 bg-green-700/60 rounded font-mono">
             a
           </kbd>

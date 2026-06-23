@@ -26,6 +26,9 @@ so adding a third runtime is a matter of mirroring their shape.
 │   └── <task-id>.pid
 ├── logs/                   # daemon stdout/stderr capture
 │   └── daemon-<task-id>.log
+├── worktrees/              # per-task git worktrees (Phase 13)
+│   └── <task-id>/
+├── projects.json           # project name → { repoPath, defaultBranch }
 └── events.jsonl            # append-only normalized event stream
 ```
 
@@ -67,6 +70,86 @@ are distinct from the deterministic verdicts (`verified` / `failed` /
 `'hermes'`, `'cli'`, etc. The server defaults to `'ui'` when
 `/api/capture` omits it. The UI renders a small chip when
 `createdBy && createdBy !== 'ui'`.
+
+## Worktrees (Phase 13)
+
+Tasks whose `project` matches an entry in `projects.json` run in an
+isolated git worktree, so multiple agents can work the same repo
+simultaneously without sharing a working tree or index.
+
+Registry: `POST /api/projects {name, repoPath, defaultBranch?,
+setupCommand?, mergeMode?}` — validates the repo, detects the default
+branch when omitted. `setupCommand` is a shell command run once per fresh
+worktree (e.g. `npm install`); `mergeMode` is `'local'` (default) or
+`'github-pr'`. `GET /api/projects` lists entries.
+
+The persisted `worktree` object on a task:
+`{ path, branch, repoPath, defaultBranch, mergeMode, setupStatus?,
+mergedAt?, mergeCommit?, mergeConflicts?, prUrl?, prNumber?, removedAt? }`.
+
+Lifecycle (all in `tools/worktrees.mjs`):
+
+- **spawn** — `ensureDaemon` calls `ensureWorktree()`:
+  `git worktree add .agent-console/worktrees/<taskId> -b task/<taskId>`
+  off the default branch, passes it to the shim as `--cwd`, and records
+  the `worktree` object on the task. Idempotent; re-attaches if the
+  directory vanished but the branch survived.
+- **setup (Phase 13.1)** — if the project has a `setupCommand` and the
+  worktree has no `<taskId>.setup-ok` marker (a sibling file, never inside
+  the tree), `startSetup()` runs it detached so the HTTP handler stays
+  responsive. The daemon spawn is **gated** on setup exiting 0 (marker
+  written, `setupStatus: 'done'`). A failure sets `setupStatus: 'failed'`,
+  `lifecycleStatus: 'blocked'`, and a message; sending another message
+  retries (marker absent ⇒ `needsSetup` still true). `setupInProgress`
+  guards against double-starting.
+- **accept = merge (local mode)** — `mergeTaskBranch()` first sweeps
+  uncommitted worktree changes into a commit (agents don't reliably
+  commit), then merges `task/<taskId>` into the default branch using
+  `git merge-tree --write-tree` + `commit-tree` + compare-and-swap
+  `update-ref` plumbing (git ≥ 2.38) — no working tree is ever touched
+  by the merge. A clean human checkout sitting on the default branch is
+  fast-forwarded afterwards; a dirty one is left alone. On conflict the
+  accept is **blocked**: `reviewStatus` → `needs_changes`,
+  `worktree.mergeConflicts` lists the files, and an agent-style message
+  explains what happened.
+- **accept = PR (github-pr mode, Phase 13.2)** — `openPullRequest()`
+  commits WIP, pushes `task/<taskId>` to `origin`, and runs `gh pr
+  create`, recording `prUrl`/`prNumber`/`prState: 'open'` and clearing the
+  task from the tray (review happens on GitHub). Any failure (no `origin`,
+  `gh` missing or unauthenticated, no commits) **blocks** the accept the
+  same way a conflict does — nothing is marked accepted that didn't ship.
+- **PR follow-up (Phase 13.2)** — a `sweepPullRequests()` poll (every
+  `PR_POLL_INTERVAL_MS`, default 60s) runs `gh pr view` for any github-pr
+  task whose `prState` isn't terminal. When GitHub reports `MERGED` /
+  `CLOSED` it records `prState` + `prMergedAt`/`prMergeCommit` and posts a
+  message, so a fire-and-forget PR still ties off its audit record. The
+  `gh` binary is overridable via `GH_BIN` (tests point it at a stub);
+  `checkPullRequest()` returns `{ error }` on any gh failure so a
+  transient error just retries on the next sweep.
+- **archive** — removes the worktree directory (sweeping any leftover
+  work onto the branch first), clears the setup marker, and sets
+  `worktree.removedAt`. The `task/<taskId>` branch is kept as the audit
+  record, merged or not.
+- **diff** — `GET /api/tasks/<id>/diff` returns
+  `{ branch, defaultBranch, baseCommit, stat, files[], uncommitted[] }`
+  (committed work from refs, uncommitted paths from the worktree) —
+  rendered by the detail panel's Branch section.
+
+Tasks without a registered project behave exactly as before Phase 13:
+the daemon runs in the server's cwd and no `worktree` field is written.
+
+### Concurrency / merge serialization — watch-item
+
+Local-mode merges are safe under parallel agents **only because the
+console-server is single-threaded**: all git calls are synchronous, so
+two accepts can't interleave their read-`merge-tree`-`update-ref`
+sequences, and the compare-and-swap `update-ref` catches an external ref
+move. This is load-bearing but implicit. If the server ever goes
+multi-process or moves into a Tauri sidecar that can handle accepts
+concurrently, this assumption breaks and a real cross-process lock (e.g.
+an `flock` on a per-repo lockfile around the merge, or a serialized merge
+queue) is required. `setupInProgress` is likewise in-process state with
+the same caveat.
 
 ## Run JSON
 

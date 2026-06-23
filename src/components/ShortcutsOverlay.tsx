@@ -2,6 +2,8 @@ import { useUIStore } from '../uiStore';
 
 const shortcuts = [
   { key: 'c', desc: 'Capture new task' },
+  { key: 'v', desc: 'Toggle cards / board view' },
+  { key: 'p', desc: 'Manage projects' },
   { key: 'a', desc: 'Accept (in review)' },
   { key: 'r', desc: 'Request changes (in review)' },
   { key: '?', desc: 'Show this help' },

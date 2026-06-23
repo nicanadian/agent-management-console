@@ -1,8 +1,9 @@
 import { create } from 'zustand';
-import type { Task, Agent, Attachment } from './types';
+import type { Task, Agent, Attachment, ProjectInfo } from './types';
 import {
   repository,
   type CaptureInput,
+  type RegisterProjectInput,
   type SendMessageMode,
 } from './data/repository';
 
@@ -13,9 +14,16 @@ import {
 interface DataStore {
   tasks: Task[];
   agents: Agent[];
+  projects: ProjectInfo[];
   loading: boolean;
 
   captureTask: (input: CaptureInput) => Promise<void>;
+  refreshProjects: () => Promise<void>;
+  // Returns the server's reason on failure so the UI can show it inline,
+  // rather than throwing into a render path.
+  registerProject: (
+    input: RegisterProjectInput
+  ) => Promise<{ ok: true } | { ok: false; error: string }>;
   assignTask: (id: string, agentId: string) => Promise<void>;
   acceptTask: (id: string) => Promise<void>;
   rejectTask: (id: string) => Promise<void>;
@@ -37,17 +45,36 @@ export const useStore = create<DataStore>((set) => {
   });
 
   // Initial load
-  Promise.all([repository.listTasks(), repository.listAgents()])
-    .then(([tasks, agents]) => set({ tasks, agents, loading: false }))
+  Promise.all([
+    repository.listTasks(),
+    repository.listAgents(),
+    repository.listProjects(),
+  ])
+    .then(([tasks, agents, projects]) =>
+      set({ tasks, agents, projects, loading: false })
+    )
     .catch(() => set({ loading: false }));
 
   return {
     tasks: [],
     agents: [],
+    projects: [],
     loading: true,
 
     captureTask: async (input) => {
       await repository.captureTask(input);
+    },
+    refreshProjects: async () => {
+      set({ projects: await repository.listProjects() });
+    },
+    registerProject: async (input) => {
+      try {
+        await repository.registerProject(input);
+        set({ projects: await repository.listProjects() });
+        return { ok: true };
+      } catch (err) {
+        return { ok: false, error: err instanceof Error ? err.message : String(err) };
+      }
     },
     assignTask: async (id, agentId) => {
       await repository.assignTask(id, agentId);

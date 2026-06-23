@@ -1,4 +1,4 @@
-import type { Task, Agent, Priority, Attachment } from '../types';
+import type { Task, Agent, Priority, Attachment, ProjectInfo } from '../types';
 import { FileSystemRepository } from './fileSystemRepository';
 
 // The repository is the persistence boundary. The FileSystemRepository is
@@ -31,10 +31,23 @@ export interface RepositorySnapshot {
 
 export type RepositoryListener = (snapshot: RepositorySnapshot) => void;
 
+// Phase 13 — registering a project validates the repo server-side, so the
+// register call can fail with a human-readable reason (not a git repo, etc).
+export interface RegisterProjectInput {
+  name: string;
+  repoPath: string;
+  defaultBranch?: string;
+  setupCommand?: string;
+  mergeMode?: 'local' | 'github-pr';
+}
+
 export interface Repository {
   listTasks(): Promise<Task[]>;
   listAgents(): Promise<Agent[]>;
   getTask(id: string): Promise<Task | undefined>;
+  // Phase 13 — project registry for worktree-isolated tasks.
+  listProjects(): Promise<ProjectInfo[]>;
+  registerProject(input: RegisterProjectInput): Promise<ProjectInfo>;
   captureTask(input: CaptureInput): Promise<Task>;
   assignTask(id: string, agentId: string): Promise<Task | undefined>;
   acceptTask(id: string): Promise<Task | undefined>;
